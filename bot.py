@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, timedelta
 from bson.objectid import ObjectId
 from pymongo import MongoClient
 import telebot
@@ -37,7 +37,7 @@ def send_task(chat_id, task_id: ObjectId, select_button=True):
     keyboard = None
     if select_button:
         keyboard = telebot.types.InlineKeyboardMarkup()
-        callback_button = telebot.types.InlineKeyboardButton(text="select", callback_data=str(task_id))
+        callback_button = telebot.types.InlineKeyboardButton(text="select", callback_data="select_" + str(task_id))
         keyboard.add(callback_button)
 
     bot.send_message(chat_id, "*{}*\n{}".format(task["name"], task["deadline"]),
@@ -52,8 +52,8 @@ def send_active_tasks(chat_id):
     """
     tasks = db.tasks.find({
         "$and": [{"deadline": {
-                    "$gte": datetime.datetime.now(),
-                    "$lt": datetime.datetime.now() + datetime.timedelta(0, 3600*8)
+                    "$gte": datetime.now(),
+                    "$lt": datetime.now() + timedelta(0, 3600*8)
                     }}, {"executor": {"$exists": False}}]
                 })
     printed=False
@@ -63,6 +63,7 @@ def send_active_tasks(chat_id):
 
     if not printed:
         bot.send_message(chat_id, "There is no tasks for you right now")
+
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -93,7 +94,38 @@ def list_of_tasks(message):
             send_active_tasks(message.chat.id)
         else:
             bot.send_message(message.chat.id, "You have active tasks")
-            send_task(message.task.id, task["_id"], False)
+            send_task(message.chat.id, task["_id"], False)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("select"))
+def select_task(call):
+    # Если сообщение из чата с ботом
+    # if call.message:
+
+    if datetime.now() - datetime.utcfromtimestamp(call.message.date) > timedelta(0, 3600*6): # Problem with timezone
+        text = "Sorry, but this information is too old.\nGet new list via /tasks."
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text)
+        bot.send_message(call.message.chat.id, text)
+    else:
+        task_id = call.data.split("_")[-1]
+        task = db.tasks.find_one({"_id": ObjectId(task_id)})
+
+        if task:
+            if task.get("executor"):
+                bot.edit_message_text(chat_id=call.message.chat.id,
+                                      message_id=call.message.message_id,
+                                      text="Someone took this task before you. Choose another task.")
+            else:
+                db.tasks.update_one({"_id": task["_id"]}, {"$set": {"executor": call.message.chat.id}})
+                db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 1}})
+
+                bot.edit_message_text(chat_id=call.message.chat.id,
+                                      message_id=call.message.message_id,
+                                      text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]))
+        else:
+            bot.edit_message_text(chat_id=call.message.chat.id,
+                                  message_id=call.message.message_id,
+                                  text="Something went wrong.\nUpdate list of the tasks via /tasks")
 
 
 if __name__ == '__main__':
