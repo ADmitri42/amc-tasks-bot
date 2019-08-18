@@ -106,6 +106,10 @@ def select_task(call):
         text = "Sorry, but this information is too old.\nGet new list via /tasks."
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text)
         bot.send_message(call.message.chat.id, text)
+    elif db.tasks.find_one({"executor": call.message.chat.id}) is not None:
+        bot.edit_message_text(chat_id=call.message.chat.id,
+                              message_id=call.message.message_id,
+                              text="You already have a task.")
     else:
         task_id = call.data.split("_")[-1]
         task = db.tasks.find_one({"_id": ObjectId(task_id)})
@@ -121,7 +125,8 @@ def select_task(call):
 
                 bot.edit_message_text(chat_id=call.message.chat.id,
                                       message_id=call.message.message_id,
-                                      text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]))
+                                      text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]),
+                                      parse_mode="Markdown")
         else:
             bot.edit_message_text(chat_id=call.message.chat.id,
                                   message_id=call.message.message_id,
