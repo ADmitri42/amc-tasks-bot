@@ -22,7 +22,11 @@ def create_or_find(chat_id):
     return user
 
 
-def send_task(chat_id, task_id: ObjectId, select_button=True):
+def send_task(chat_id,
+              task_id: ObjectId,
+              select_button=False,
+              done_button=False,
+              yn_button=False):
     """
     Send formatted task to user
     :param chat_id:
@@ -35,12 +39,27 @@ def send_task(chat_id, task_id: ObjectId, select_button=True):
         raise ValueError("Id {} not exists".format(task_id))
 
     keyboard = None
-    if select_button:
+    message = "*{}*\n{}"
+    if select_button or done_button or yn_button:
         keyboard = telebot.types.InlineKeyboardMarkup()
-        callback_button = telebot.types.InlineKeyboardButton(text="select", callback_data="select_" + str(task_id))
-        keyboard.add(callback_button)
+        if select_button:
+            callback_button = telebot.types.InlineKeyboardButton(text="select", callback_data="select_" + str(task_id))
+            keyboard.add(callback_button)
 
-    bot.send_message(chat_id, "*{}*\n{}".format(task["name"], task["deadline"]),
+        elif done_button:
+            callback_button = telebot.types.InlineKeyboardButton(text="done", callback_data="done_" + str(task_id))
+            keyboard.add(callback_button)
+
+        elif yn_button:
+            keyboard = telebot.types.InlineKeyboardMarkup()
+            callback_button = telebot.types.InlineKeyboardButton(text="Yes", callback_data="done_y_" + str(task_id))
+            keyboard.add(callback_button)
+            callback_button = telebot.types.InlineKeyboardButton(text="No", callback_data="done_n_" + str(task_id))
+            keyboard.add(callback_button)
+            message = "*{}*\n{}\n\n*You sure?*"
+
+
+    bot.send_message(chat_id, message.format(task["name"], task["deadline"]),
                          reply_markup=keyboard, parse_mode="Markdown")
 
 
@@ -59,7 +78,7 @@ def send_active_tasks(chat_id):
     printed=False
     for task in tasks:
         printed = True
-        send_task(chat_id, task["_id"], True)
+        send_task(chat_id, task["_id"], select_button=True)
 
     if not printed:
         bot.send_message(chat_id, "There is no tasks for you right now")
@@ -94,13 +113,23 @@ def list_of_tasks(message):
             send_active_tasks(message.chat.id)
         else:
             bot.send_message(message.chat.id, "You have active tasks")
-            send_task(message.chat.id, task["_id"], False)
+            send_task(message.chat.id, task["_id"], False, True)
+    elif user["state"] == 2:
+        task = db.tasks.find_one({"executor": message.chat.id})
+        if task is None:
+            db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 0}})
+        else:
+            db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 1}})
+        list_of_tasks(message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select"))
 def select_task(call):
-    # Если сообщение из чата с ботом
-    # if call.message:
+    """
+    Handler for button select
+    :param call:
+    :return:
+    """
 
     if datetime.now() - datetime.utcfromtimestamp(call.message.date) > timedelta(0, 3600*6): # Problem with timezone
         text = "Sorry, but this information is too old.\nGet new list via /tasks."
@@ -131,6 +160,53 @@ def select_task(call):
             bot.edit_message_text(chat_id=call.message.chat.id,
                                   message_id=call.message.message_id,
                                   text="Something went wrong.\nUpdate list of the tasks via /tasks")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("done"))
+def done_task(call):
+    """
+    Handler for button done
+    :param call:
+    :return:
+    """
+
+    if datetime.now() - datetime.utcfromtimestamp(call.message.date) > timedelta(0, 3600*6): # Problem with timezone
+        text = "Sorry, but this information is too old.\nUpdate it via /tasks."
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text)
+        bot.send_message(call.message.chat.id, text)
+    else:
+        user = create_or_find(call.message.chat.id)
+        if user["state"] == 1:
+            task_id = call.data.split("_")[-1]
+            task = db.tasks.find_one({"_id": ObjectId(task_id)})
+            if task:
+                db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 2}})
+                send_task(call.message.chat.id, task["_id"], yn_button=True)
+
+            else:
+                db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 0}})
+                bot.edit_message_text(chat_id=call.message.chat.id,
+                                      message_id=call.message.message_id,
+                                      text="Something went wrong.\nUpdate list of the tasks via /tasks")
+        elif user["state"] == 2:
+            task_id = call.data.split("_")[-1]
+            sol = call.data.split("_")[1]
+            task = db.tasks.find_one({"_id": ObjectId(task_id)})
+            if task:
+                if sol == "y":
+                    db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"done": True}})
+                    db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 0}})
+                    bot.edit_message_text(chat_id=call.message.chat.id,
+                                          message_id=call.message.message_id,
+                                          text="*{}*\n{}\n\n*Done*".format(task["name"], task["deadline"]),
+                                          parse_mode="Markdown")
+                elif sol == "n":
+                    db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"done": False}})
+                    db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 1}})
+                    bot.edit_message_text(chat_id=call.message.chat.id,
+                                      message_id=call.message.message_id,
+                                      text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]),
+                                      parse_mode="Markdown")
 
 
 if __name__ == '__main__':
