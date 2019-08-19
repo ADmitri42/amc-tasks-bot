@@ -224,7 +224,10 @@ def done_task(call):
             task = db.tasks.find_one({"_id": ObjectId(task_id)})
             if task:
                 db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 2}})
-                send_task(call.message.chat.id, task["_id"], yn_button=True)
+                send_task(call.message.chat.id,
+                          task["_id"],
+                          yn_button=True,
+                          message_id=call.message.message_id)
 
             else:
                 db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 0}})
