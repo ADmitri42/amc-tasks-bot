@@ -32,9 +32,12 @@ bot = telebot.TeleBot(config.token)
 def create_or_find(chat_id):
     user = db.users.find_one({"chat_id": chat_id})
     if user is None:
+        chat = bot.get_chat(chat_id)
         user = {
             "chat_id": chat_id,
-                "state": 0}
+            "state": 0,
+            "username": chat.username
+        }
         db.users.insert_one(user)
         user = db.users.find_one({"chat_id": chat_id})
 
@@ -45,7 +48,8 @@ def send_task(chat_id,
               task_id: ObjectId,
               select_button=False,
               done_button=False,
-              yn_button=False):
+              yn_button=False,
+              message_id=None):
     """
     Send formatted task to user
     :param chat_id:
@@ -81,7 +85,14 @@ def send_task(chat_id,
 
             message = "*{}*\n{}\n\n*You sure?*"
 
-    bot.send_message(chat_id,
+    if message_id:
+        bot.bot.edit_message_text(chat_id=chat_id,
+                                  message_id=message_id,
+                                  reply_markup=keyboard,
+                                  text=message.format(task["name"], task["deadline"]),
+                                  parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id,
                      message.format(task["name"], task["deadline"]),
                      reply_markup=keyboard,
                      parse_mode="Markdown")
@@ -152,18 +163,20 @@ def select_task(call):
     """
     logging.info("Select button was pushed", extra={"chat": call.message.chat.id})
     if datetime.now() - datetime.utcfromtimestamp(call.message.date) > timedelta(0, 3600*6): # Problem with timezone
+        logging.debug("Info is too old", extra={"chat": call.message.chat.id})
         text = "Sorry, but this information is too old.\nGet new list via /tasks."
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text)
         bot.send_message(call.message.chat.id, text)
-    elif db.tasks.find_one({"executor": call.message.chat.id}) is not None:
+    elif db.tasks.find_one({"$and": [{"executor": call.message.chat.id}, {"done": False}]}) is not None:
+        logging.debug("Already have a task", extra={"chat": call.message.chat.id})
         bot.edit_message_text(chat_id=call.message.chat.id,
                               message_id=call.message.message_id,
                               text="You already have a task.")
     else:
         task_id = call.data.split("_")[-1]
         task = db.tasks.find_one({"_id": ObjectId(task_id)})
-
         if task:
+            logging.debug("Select task" + str(task), extra={"chat": call.message.chat.id})
             if task.get("executor"):
                 bot.edit_message_text(chat_id=call.message.chat.id,
                                       message_id=call.message.message_id,
@@ -172,6 +185,15 @@ def select_task(call):
                 db.tasks.update_one({"_id": task["_id"]}, {"$set": {"executor": call.message.chat.id}})
                 db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 1}})
 
+                name = ''
+                if call.message.chat.first_name:
+                    name += call.message.chat.first_name
+                if call.message.chat.last_name:
+                    name += ' ' + call.message.chat.last_name
+                if call.message.chat.username:
+                    name += '(@' + call.message.chat.username + ')'
+
+                bot.send_message("@amctasks", "{} took task \"{}\"".format(name, task['name']))
                 bot.edit_message_text(chat_id=call.message.chat.id,
                                       message_id=call.message.message_id,
                                       text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]),
@@ -190,7 +212,7 @@ def done_task(call):
     :return:
     """
 
-    logging.info("Done or yes/no button were pushed by user {}".user(call.message.chat.id))
+    logging.info("Done or yes/no button were pushed by user {}".format(call.message.chat.id))
     if datetime.now() - datetime.utcfromtimestamp(call.message.date) > timedelta(0, 3600*3.5):  # Problem with timezone
         text = "Sorry, but this information is too old.\nUpdate it via /tasks."
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text)
@@ -217,6 +239,17 @@ def done_task(call):
                 if sol == "y":
                     db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"done": True}})
                     db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 0}})
+
+                    name = ''
+                    if call.message.chat.first_name:
+                        name += call.message.chat.first_name
+                    if call.message.chat.last_name:
+                        name += ' ' + call.message.chat.last_name
+                    if call.message.chat.username:
+                        name += '(@' + call.message.chat.username + ')'
+
+                    bot.send_message("@amctasks",
+                                     "Task \"{}\" done by {}".format(task['name'], name))
                     bot.edit_message_text(chat_id=call.message.chat.id,
                                           message_id=call.message.message_id,
                                           text="*{}*\n{}\n\n*Done*".format(task["name"], task["deadline"]),
