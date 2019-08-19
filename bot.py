@@ -143,7 +143,7 @@ def list_of_tasks(message):
     if user["state"] == 0:
         send_active_tasks(message.chat.id)
     elif user["state"] == 1 or user["state"] == 2:
-        task = db.tasks.find_one({"executor": message.chat.id})
+        task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
         if task is None:
             db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 0}})
             send_active_tasks(message.chat.id)
