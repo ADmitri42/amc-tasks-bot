@@ -267,8 +267,13 @@ def done_task(call):
 
 
 if __name__ == '__main__':
-    logger.info("Bot started", extra={"chat": "Not chat"})
-    try:
-        bot.polling(none_stop=True)
-    except Exception as e:
-        logging.error("Exception", exc_info=True)
+    for _ in range(10):
+        logger.info("Bot started", extra={"chat": "Not chat"})
+        try:
+            bot.polling(none_stop=True)
+        except Exception as e:
+            logging.error("Exception", exc_info=True)
+            bot.send_message("@amctasks",
+                             "*Problems on the server*\nRestarting bot...")
+    bot.send_message("@amctasks",
+                     "*Bot is disabled*")
