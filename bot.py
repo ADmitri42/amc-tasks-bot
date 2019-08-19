@@ -86,7 +86,7 @@ def send_task(chat_id,
             message = "*{}*\n{}\n\n*You sure?*"
 
     if message_id:
-        bot.bot.edit_message_text(chat_id=chat_id,
+        bot.edit_message_text(chat_id=chat_id,
                                   message_id=message_id,
                                   reply_markup=keyboard,
                                   text=message.format(task["name"], task["deadline"]),
