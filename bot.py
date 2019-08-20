@@ -13,7 +13,7 @@ fh = logging.FileHandler('tasks_bot.log')
 fh.setLevel(logging.DEBUG)
 # create console handler with a higher log level
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.ERROR)
 
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(chat)s - %(message)s')
 fh.setFormatter(formatter)
@@ -23,7 +23,7 @@ logger.addHandler(fh)
 logger.addHandler(ch)
 
 
-client = MongoClient("mongodb+srv://admin:test1@amctasks-3lcps.gcp.mongodb.net/test?retryWrites=true&w=majority")
+client = MongoClient(config.dbstring)
 db = client.AMCtasks
 
 bot = telebot.TeleBot(config.token)
@@ -57,6 +57,7 @@ def send_task(chat_id,
     :param select_button:
     :param done_button:
     :param yn_button:
+    :param message_id:
     :return:
     """
     task = db.tasks.find_one({"_id": task_id})
@@ -109,7 +110,7 @@ def send_active_tasks(chat_id):
                     "$gte": datetime.now(),
                     "$lt": datetime.now() + timedelta(0, 3600*8)
                     }}, {"executor": {"$exists": False}}]
-                })
+                }).sort([('deadline', 1)])
     printed = False
     for task in tasks:
         printed = True
@@ -146,6 +147,7 @@ def list_of_tasks(message):
         task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
         if task is None:
             db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 0}})
+            logger.error("State of user {} but no tasks".format(user["state"]))
             send_active_tasks(message.chat.id)
         else:
             bot.send_message(message.chat.id, "You have active tasks")
@@ -193,7 +195,7 @@ def select_task(call):
                 if call.message.chat.username:
                     name += '(@' + call.message.chat.username + ')'
 
-                bot.send_message("@amctasks", "{} took task \"{}\"".format(name, task['name']))
+                bot.send_message(config.channelname, "{} took task \"{}\"".format(name, task['name']))
                 bot.edit_message_text(chat_id=call.message.chat.id,
                                       message_id=call.message.message_id,
                                       text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]),
@@ -251,7 +253,7 @@ def done_task(call):
                     if call.message.chat.username:
                         name += '(@' + call.message.chat.username + ')'
 
-                    bot.send_message("@amctasks",
+                    bot.send_message(config.channelname,
                                      "Task \"{}\" done by {}".format(task['name'], name))
                     bot.edit_message_text(chat_id=call.message.chat.id,
                                           message_id=call.message.message_id,
@@ -267,7 +269,7 @@ def done_task(call):
 
 
 if __name__ == '__main__':
-    bot.send_message("@amctasks",
+    bot.send_message(config.channelname,
                     "*Bot enabled*",
                     parse_mode="Markdown")
     for _ in range(3):
@@ -276,6 +278,6 @@ if __name__ == '__main__':
             bot.polling(none_stop=True)
         except telebot.apihelper.ApiExceptionKeyboardInterrupt as e:
             logging.error("Exception", exc_info=True)
-    bot.send_message("@amctasks",
+    bot.send_message(config.channelname,
                     "*Bot is disabled*",
                     parse_mode="Markdown")
