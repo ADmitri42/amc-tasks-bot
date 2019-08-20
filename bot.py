@@ -267,13 +267,15 @@ def done_task(call):
 
 
 if __name__ == '__main__':
-    for _ in range(10):
+    bot.send_message("@amctasks",
+                    "*Bot enabled*",
+                    parse_mode="Markdown")
+    for _ in range(3):
         logger.info("Bot started", extra={"chat": "Not chat"})
         try:
             bot.polling(none_stop=True)
-        except Exception as e:
+        except telebot.apihelper.ApiExceptionKeyboardInterrupt as e:
             logging.error("Exception", exc_info=True)
-            bot.send_message("@amctasks",
-                             "*Problems on the server*\nRestarting bot...")
     bot.send_message("@amctasks",
-                     "*Bot is disabled*")
+                    "*Bot is disabled*",
+                    parse_mode="Markdown")
