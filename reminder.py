@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 import telebot
@@ -27,5 +28,5 @@ tasks = db.tasks.find(
 
 for task in tasks:
     bot.send_message(task['executor'], "It's friendly reminder that you have a task.")
-    db.users.update({'chat_id': task['executor']}, {"$set": {'state': 1}})
+    db.users.update_many({'chat_id': task['executor']}, {"$set": {'state': 1}})
     sleep(2)
