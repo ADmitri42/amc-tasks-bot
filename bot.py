@@ -270,12 +270,11 @@ if __name__ == '__main__':
     bot.send_message("@amctasks",
                     "*Bot enabled*",
                     parse_mode="Markdown")
-    for _ in range(3):
-        logger.info("Bot started", extra={"chat": "Not chat"})
-        try:
-            bot.polling(none_stop=True)
-        except telebot.apihelper.ApiExceptionKeyboardInterrupt as e:
-            logging.error("Exception", exc_info=True)
+    logger.info("Bot started", extra={"chat": "Not chat"})
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        logging.error("Exception", exc_info=True)
     bot.send_message("@amctasks",
                     "*Bot is disabled*",
                     parse_mode="Markdown")
