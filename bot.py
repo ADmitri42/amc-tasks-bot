@@ -134,7 +134,7 @@ def start(message):
     """
     logger.info("New user", extra={"chat": message.chat.id})
     create_or_find(message.chat.id)
-    bot.send_message(message.chat.id, "Hello! Welcome to AMC Tasks")
+    bot.send_message(message.chat.id, config.hellomessage)
 
 
 @bot.message_handler(commands=['tasks'])
@@ -142,6 +142,7 @@ def list_of_tasks(message):
     logger.info("Sending list of tasks", extra={"chat": message.chat.id})
     user = create_or_find(message.chat.id)
     if user["state"] == 0:
+        task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
         send_active_tasks(message.chat.id)
     elif user["state"] == 1 or user["state"] == 2:
         task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
