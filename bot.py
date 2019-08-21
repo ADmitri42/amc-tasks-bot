@@ -4,6 +4,7 @@ from bson.objectid import ObjectId
 from pymongo import MongoClient
 import telebot
 
+import database
 import config
 
 logger = logging.getLogger('AMC_tasks_bot')
@@ -23,24 +24,19 @@ logger.addHandler(fh)
 logger.addHandler(ch)
 
 
-client = MongoClient(config.dbstring)
-db = client.AMCtasks
-
+db = database.Database(config.dbstring)
 bot = telebot.TeleBot(config.token)
 
 
 def create_or_find(chat_id):
-    user = db.users.find_one({"chat_id": chat_id})
+    user = db.get_user(chat_id)
     if user is None:
         chat = bot.get_chat(chat_id)
-        user = {
-            "chat_id": chat_id,
-            "state": 0,
-            "username": chat.username
-        }
-        db.users.insert_one(user)
-        user = db.users.find_one({"chat_id": chat_id})
-
+        user = db.create_user(chat_id,
+                              chat['username'],
+                              chat['first_name'],
+                              chat['last_name']
+                              )
     return user
 
 
@@ -141,20 +137,24 @@ def start(message):
 def list_of_tasks(message):
     logger.info("Sending list of tasks", extra={"chat": message.chat.id})
     user = create_or_find(message.chat.id)
-    if user["state"] == 0:
-        task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
+
+    if user.state == database.NOTBUSY:
         send_active_tasks(message.chat.id)
-    elif user["state"] == 1 or user["state"] == 2:
+
+    elif user.state == 1 or user.state == 2:
         task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
+
         if task is None:
-            db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 0}})
+            user.update_state(database.NOTBUSY)
             logger.error("State of user {} but no tasks".format(user["state"]))
             send_active_tasks(message.chat.id)
+
         else:
             bot.send_message(message.chat.id, "You have active tasks")
             send_task(message.chat.id, task["_id"], False, True)
-            if user["state"] == 2:
-                db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 1}})
+
+            if user["state"] == database.ALMOSTDONE:
+                user.update_state(database.BUSY)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select"))
