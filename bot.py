@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime, timedelta
 from bson.objectid import ObjectId
-from pymongo import MongoClient
 import telebot
 
 import database

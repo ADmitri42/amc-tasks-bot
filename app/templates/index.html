@@ -1,0 +1,13 @@
+{% from "_formhelpers.html" import render_field %}
+{% extends "base.html" %}
+
+{% block content %}
+<form method=post>
+	<dl>
+		{{ render_field(form.name) }}
+		{{ render_field(form.deadline) }}
+		{{ render_field(form.accept_tos) }}
+	</dl>
+	<p><input type=submit value=Register>
+</form>
+{% endblock %}
