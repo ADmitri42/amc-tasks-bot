@@ -148,6 +148,10 @@ def list_of_tasks(message):
             if user.state == database.ALMOSTDONE:
                 user.update_state(database.BUSY)
 
+@bot.message_handler(commands=['learn'])
+def learn(message):
+    bot.send_message(message.chat.id, config.learnmessage)
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select"))
 def select_task(call):
