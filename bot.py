@@ -32,9 +32,9 @@ def create_or_find(chat_id):
     if user is None:
         chat = bot.get_chat(chat_id)
         user = db.create_user(chat_id,
-                              chat['username'],
-                              chat['first_name'],
-                              chat['last_name']
+                              chat.username,
+                              chat.first_name,
+                              chat.last_name
                               )
     return user
 
@@ -184,7 +184,7 @@ def select_task(call):
                 task.add_executor(user)
                 user.update_state(database.BUSY)
 
-                bot.send_message(config.channelname, "{} took task \"{}\"".format(task, task.name))
+                bot.send_message(config.channelname, "{} took task \"{}\"".format(user, task.name))
                 bot.edit_message_text(chat_id=user.chat_id,
                                       message_id=call.message.message_id,
                                       text=str(task) + "\n\n*Your task*",
