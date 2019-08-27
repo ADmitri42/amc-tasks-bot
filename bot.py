@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime, timedelta
 from bson.objectid import ObjectId
-from pymongo import MongoClient
 import telebot
 
+import database
 import config
 
 logger = logging.getLogger('AMC_tasks_bot')
@@ -23,28 +23,23 @@ logger.addHandler(fh)
 logger.addHandler(ch)
 
 
-client = MongoClient(config.dbstring)
-db = client.AMCtasks
-
+db = database.Database(config.dbstring)
 bot = telebot.TeleBot(config.token)
 
 
 def create_or_find(chat_id):
-    user = db.users.find_one({"chat_id": chat_id})
+    user = db.get_user(chat_id)
     if user is None:
         chat = bot.get_chat(chat_id)
-        user = {
-            "chat_id": chat_id,
-            "state": 0,
-            "username": chat.username
-        }
-        db.users.insert_one(user)
-        user = db.users.find_one({"chat_id": chat_id})
-
+        user = db.create_user(chat_id,
+                              chat.username,
+                              chat.first_name,
+                              chat.last_name
+                              )
     return user
 
 
-def send_task(chat_id,
+def send_task(user,
               task_id: ObjectId,
               select_button=False,
               done_button=False,
@@ -60,12 +55,12 @@ def send_task(chat_id,
     :param message_id:
     :return:
     """
-    task = db.tasks.find_one({"_id": task_id})
+    task = db.get_task(task_id)
     if task is None:
         raise ValueError("Id {} not exists".format(task_id))
 
     keyboard = None
-    message = "*{}*\n{}"
+    message = str(task)
     if select_button or done_button or yn_button:
         keyboard = telebot.types.InlineKeyboardMarkup()
 
@@ -74,7 +69,7 @@ def send_task(chat_id,
             keyboard.add(callback_button)
 
         elif done_button:
-            message = "*{}*\n{}\n\n_Done_?"
+            message += "\n\n_Done_?"
             callback_button = telebot.types.InlineKeyboardButton(text="done", callback_data="done_" + str(task_id))
             keyboard.add(callback_button)
 
@@ -84,40 +79,33 @@ def send_task(chat_id,
             callback_button = telebot.types.InlineKeyboardButton(text="No", callback_data="done_n_" + str(task_id))
             keyboard.add(callback_button)
 
-            message = "*{}*\n{}\n\n*You sure?*"
+            message += "\n\n*You sure?*"
 
     if message_id:
-        bot.edit_message_text(chat_id=chat_id,
-                                  message_id=message_id,
-                                  reply_markup=keyboard,
-                                  text=message.format(task["name"], task["deadline"]),
-                                  parse_mode="Markdown")
+        bot.edit_message_text(chat_id=user.chat_id,
+                              message_id=message_id,
+                              reply_markup=keyboard,
+                              text=message,
+                              parse_mode="Markdown")
     else:
-        bot.send_message(chat_id,
-                     message.format(task["name"], task["deadline"]),
-                     reply_markup=keyboard,
-                     parse_mode="Markdown")
+        bot.send_message(user.chat_id,
+                         message,
+                         reply_markup=keyboard,
+                         parse_mode="Markdown")
 
 
-def send_active_tasks(chat_id):
+def send_active_tasks(user):
     """
     Send list of tasks to user
-    :param chat_id:
+    :param user:
     :return:
     """
-    tasks = db.tasks.find({
-        "$and": [{"deadline": {
-                    "$gte": datetime.now(),
-                    "$lt": datetime.now() + timedelta(0, 3600*8)
-                    }}, {"executor": {"$exists": False}}]
-                }).sort([('deadline', 1)])
-    printed = False
-    for task in tasks:
-        printed = True
-        send_task(chat_id, task["_id"], select_button=True)
-
-    if not printed:
-        bot.send_message(chat_id, "There is no tasks for you right now")
+    tasks_id = db.get_active_tasks_id()
+    if len(tasks_id) > 0:
+        for task_id in tasks_id:
+            send_task(user, task_id['_id'], select_button=True)
+    else:
+        bot.send_message(user.chat_id, "There is no tasks for you right now")
 
 
 @bot.message_handler(commands=['start'])
@@ -141,20 +129,24 @@ def start(message):
 def list_of_tasks(message):
     logger.info("Sending list of tasks", extra={"chat": message.chat.id})
     user = create_or_find(message.chat.id)
-    if user["state"] == 0:
-        task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
-        send_active_tasks(message.chat.id)
-    elif user["state"] == 1 or user["state"] == 2:
-        task = db.tasks.find_one({"$and": [{"executor": message.chat.id}, {"done": False}]})
+
+    if user.state == database.NOTBUSY:
+        send_active_tasks(user)
+
+    elif user.state == 1 or user.state == 2:
+        task = db.find_task(user)
+
         if task is None:
-            db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 0}})
+            user.update_state(database.NOTBUSY)
             logger.error("State of user {} but no tasks".format(user["state"]))
-            send_active_tasks(message.chat.id)
+            send_active_tasks(user)
+
         else:
-            bot.send_message(message.chat.id, "You have active tasks")
-            send_task(message.chat.id, task["_id"], False, True)
-            if user["state"] == 2:
-                db.users.update_one({"chat_id": message.chat.id}, {"$set": {"state": 1}})
+            bot.send_message(user.chat_id, "You have active tasks")
+            send_task(user, task.id, False, True)
+
+            if user.state == database.ALMOSTDONE:
+                user.update_state(database.BUSY)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select"))
@@ -165,44 +157,40 @@ def select_task(call):
     :return:
     """
     logging.info("Select button was pushed", extra={"chat": call.message.chat.id})
+    user = db.get_user(call.message.chat.id)
+
     if datetime.now() - datetime.utcfromtimestamp(call.message.date) > timedelta(0, 3600*6): # Problem with timezone
         logging.debug("Info is too old", extra={"chat": call.message.chat.id})
         text = "Sorry, but this information is too old.\nGet new list via /tasks."
-        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text)
-        bot.send_message(call.message.chat.id, text)
-    elif db.tasks.find_one({"$and": [{"executor": call.message.chat.id}, {"done": False}]}) is not None:
-        logging.debug("Already have a task", extra={"chat": call.message.chat.id})
-        bot.edit_message_text(chat_id=call.message.chat.id,
+        bot.edit_message_text(chat_id=user.chat_id, message_id=call.message.message_id, text=text)
+        bot.send_message(user.chat_id, text)
+
+    elif db.find_task(user) is not None:
+        logging.debug("You already have a task", extra={"chat": call.message.chat.id})
+        bot.edit_message_text(chat_id=user.chat_id,
                               message_id=call.message.message_id,
                               text="You already have a task.")
+
     else:
         task_id = call.data.split("_")[-1]
-        task = db.tasks.find_one({"_id": ObjectId(task_id)})
+        task = db.get_task(ObjectId(task_id))
         if task:
-            logging.debug("Select task" + str(task), extra={"chat": call.message.chat.id})
-            if task.get("executor"):
-                bot.edit_message_text(chat_id=call.message.chat.id,
+            logging.debug("Select task " + str(task.id), extra={"chat": call.message.chat.id})
+            if task.executor:
+                bot.edit_message_text(chat_id=user.chat_id,
                                       message_id=call.message.message_id,
                                       text="Someone took this task before you. Choose another task.")
             else:
-                db.tasks.update_one({"_id": task["_id"]}, {"$set": {"executor": call.message.chat.id}})
-                db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 1}})
+                task.add_executor(user)
+                user.update_state(database.BUSY)
 
-                name = ''
-                if call.message.chat.first_name:
-                    name += call.message.chat.first_name
-                if call.message.chat.last_name:
-                    name += ' ' + call.message.chat.last_name
-                if call.message.chat.username:
-                    name += '(@' + call.message.chat.username + ')'
-
-                bot.send_message(config.channelname, "{} took task \"{}\"".format(name, task['name']))
-                bot.edit_message_text(chat_id=call.message.chat.id,
+                bot.send_message(config.channelname, "{} took task \"{}\"".format(user, task.name))
+                bot.edit_message_text(chat_id=user.chat_id,
                                       message_id=call.message.message_id,
-                                      text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]),
+                                      text=str(task) + "\n\n*Your task*",
                                       parse_mode="Markdown")
         else:
-            bot.edit_message_text(chat_id=call.message.chat.id,
+            bot.edit_message_text(chat_id=user.chat_id,
                                   message_id=call.message.message_id,
                                   text="Something went wrong.\nUpdate list of the tasks via /tasks")
 
@@ -216,68 +204,60 @@ def done_task(call):
     """
 
     logging.info("Done or yes/no button were pushed by user {}".format(call.message.chat.id))
+    user = db.get_user(call.message.chat.id)
+
     if datetime.now() - datetime.utcfromtimestamp(call.message.date) > timedelta(0, 3600*3.5):  # Problem with timezone
         text = "Sorry, but this information is too old.\nUpdate it via /tasks."
-        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text)
-        bot.send_message(call.message.chat.id, text)
+        bot.edit_message_text(chat_id=user.chat_id, message_id=call.message.message_id, text=text)
+        bot.send_message(user.chat_id, text)
     else:
-        user = create_or_find(call.message.chat.id)
-        if user["state"] == 1:
+        if user.state == database.BUSY:
             task_id = call.data.split("_")[-1]
-            task = db.tasks.find_one({"_id": ObjectId(task_id)})
+            task = db.get_task(ObjectId(task_id))
             if task:
-                db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 2}})
-                send_task(call.message.chat.id,
-                          task["_id"],
+                user.update_state(database.ALMOSTDONE)
+                send_task(user,
+                          task.id,
                           yn_button=True,
                           message_id=call.message.message_id)
 
             else:
-                db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 0}})
+                user.update_state(database.BUSY)
                 bot.edit_message_text(chat_id=call.message.chat.id,
                                       message_id=call.message.message_id,
                                       text="Something went wrong.\nUpdate list of the tasks via /tasks")
-        elif user["state"] == 2:
+        elif user.state == database.ALMOSTDONE:
             task_id = call.data.split("_")[-1]
             sol = call.data.split("_")[1]
-            task = db.tasks.find_one({"_id": ObjectId(task_id)})
+            task = db.get_task(ObjectId(task_id))
             if task:
                 if sol == "y":
-                    db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"done": True}})
-                    db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 0}})
-
-                    name = ''
-                    if call.message.chat.first_name:
-                        name += call.message.chat.first_name
-                    if call.message.chat.last_name:
-                        name += ' ' + call.message.chat.last_name
-                    if call.message.chat.username:
-                        name += '(@' + call.message.chat.username + ')'
+                    task.set_done()
+                    user.update_state(database.NOTBUSY)
 
                     bot.send_message(config.channelname,
-                                     "Task \"{}\" done by {}".format(task['name'], name))
-                    bot.edit_message_text(chat_id=call.message.chat.id,
+                                     "Task \"{}\" done by {}".format(task.name, user))
+                    bot.edit_message_text(chat_id=user.chat_id,
                                           message_id=call.message.message_id,
-                                          text="*{}*\n{}\n\n*Done*".format(task["name"], task["deadline"]),
+                                          text=str(task) + "\n\n*Done*",
                                           parse_mode="Markdown")
                 elif sol == "n":
-                    db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"done": False}})
-                    db.users.update_one({"chat_id": call.message.chat.id}, {"$set": {"state": 1}})
-                    bot.edit_message_text(chat_id=call.message.chat.id,
+                    user.update_state(database.BUSY)
+                    bot.edit_message_text(chat_id=user.chat_id,
                                           message_id=call.message.message_id,
-                                          text="*{}*\n{}\n\n*Your task*".format(task["name"], task["deadline"]),
+                                          text=str(task) + "\n\n*Your task*",
                                           parse_mode="Markdown")
 
 
 if __name__ == '__main__':
     bot.send_message(config.channelname,
-                    "*Bot enabled*",
-                    parse_mode="Markdown")
+                     "*Bot enabled*",
+                     parse_mode="Markdown")
     logger.info("Bot started", extra={"chat": "Not chat"})
     try:
         bot.polling(none_stop=True)
     except Exception as e:
         logging.error("Exception", exc_info=True)
-    bot.send_message("@amctasks",
-                    "*Bot is disabled*",
+    bot.send_message(config.channelname,
+                    "*Bot disabled*",
                     parse_mode="Markdown")
